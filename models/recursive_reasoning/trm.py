@@ -305,11 +305,19 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
 
             # Add channel dimension and apply patch embedding
             # Shape: [batch_size, 1, grid_height, grid_width]
-            grid = grid.unsqueeze(1).to(torch.float32)
+            grid = grid.unsqueeze(1).to(self.forward_dtype)
 
-            # Apply patch embedding conv
+            # Apply patch embedding conv with dtype casting
             # Output shape: [batch_size, hidden_size, patch_grid_h, patch_grid_w]
-            embedding = self.patch_embed(grid).to(self.forward_dtype)
+            embedding = F.conv2d(
+                grid,
+                self.patch_embed.weight.to(self.forward_dtype),
+                bias=self.patch_embed.bias.to(self.forward_dtype)
+                if self.patch_embed.bias is not None
+                else None,
+                stride=self.patch_embed.stride,
+                padding=self.patch_embed.padding,
+            )
 
             # Flatten spatial dimensions
             # Shape: [batch_size, hidden_size, num_patches]
@@ -433,7 +441,17 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
                 )
 
                 # Apply upsampling: [B, hidden_size, patch_h, patch_w] -> [B, vocab_size, grid_h, grid_w]
-                output_grid = self.upsample(z_H_spatial)
+                # Cast conv weights to match input dtype
+                input_dtype = z_H_spatial.dtype
+                conv_layer = self.upsample[0]
+                output_grid = F.conv2d(
+                    z_H_spatial,
+                    conv_layer.weight.to(input_dtype),
+                    bias=conv_layer.bias.to(input_dtype)
+                    if conv_layer.bias is not None
+                    else None,
+                )
+                output_grid = self.upsample[1](output_grid)  # PixelShuffle
 
                 # Flatten to sequence: [B, vocab_size, grid_h, grid_w] -> [B, vocab_size, seq_len]
                 output = output_grid.flatten(2)
