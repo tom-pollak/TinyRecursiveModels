@@ -400,7 +400,10 @@ def convert_dataset(config: DataProcessConfig):
                             ignore_label_id=0,  # Will be used for masking
                         )
 
-                        # Concatenate test output to labels (this is what we predict)
+                        # Concatenate test output to both inputs and labels
+                        # Input includes test_out for teacher forcing during training
+                        # Labels compute loss only on test_out positions (rest are masked)
+                        input_seq = np.concatenate([input_seq, test_out])
                         label_seq = np.concatenate([label_seq, test_out])
 
                         results["inputs"].append(input_seq)
