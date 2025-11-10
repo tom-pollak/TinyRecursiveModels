@@ -135,6 +135,65 @@ arch.H_cycles=3 arch.L_cycles=4 \
 
 *Runtime:* < 24 hours
 
+## In-Context Learning Variant
+
+The codebase now supports an **in-context learning** approach where the model learns transformations from demonstration examples rather than puzzle ID embeddings. In this variant:
+
+- Each training sequence contains demonstration examples (input→output pairs) followed by a test input
+- The model predicts only the final output, learning the transformation pattern from context
+- For a puzzle with examples [A, B, C], we create 3 training samples by rolling through which example is the test case:
+  - `[A_in, A_out, B_in, B_out, C_in]` → predict `C_out`
+  - `[C_in, C_out, A_in, A_out, B_in]` → predict `B_out`
+  - `[B_in, B_out, C_in, C_out, A_in]` → predict `A_out`
+- Puzzle embeddings are disabled (`puzzle_emb_ndim: 0`)
+- All augmentations (dihedral + color permutation) are still applied
+
+### Dataset Preparation (In-Context Learning)
+
+```bash
+# ARC-AGI-1 with in-context learning
+python -m dataset.build_arc_dataset \
+  --input-file-prefix kaggle/combined/arc-agi \
+  --output-dir data/arc1concept-incontext-aug-1000 \
+  --subsets training evaluation concept \
+  --test-set-name evaluation
+
+# ARC-AGI-2 with in-context learning
+python -m dataset.build_arc_dataset \
+  --input-file-prefix kaggle/combined/arc-agi \
+  --output-dir data/arc2concept-incontext-aug-1000 \
+  --subsets training2 evaluation2 concept \
+  --test-set-name evaluation2
+```
+
+### Training (In-Context Learning)
+
+**ARC-AGI-1 (assuming 4 H-100 GPUs):**
+
+```bash
+run_name="pretrain_incontext_arc1concept_4"
+torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
+arch=trm \
+data_paths="[data/arc1concept-incontext-aug-1000]" \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=4 \
++run_name=${run_name} ema=True
+```
+
+**ARC-AGI-2 (assuming 4 H-100 GPUs):**
+
+```bash
+run_name="pretrain_incontext_arc2concept_4"
+torchrun --nproc-per-node 4 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py \
+arch=trm \
+data_paths="[data/arc2concept-incontext-aug-1000]" \
+arch.L_layers=2 \
+arch.H_cycles=3 arch.L_cycles=4 \
++run_name=${run_name} ema=True
+```
+
+**Note:** The in-context learning variant uses the same config (`arch=trm`) which now has `puzzle_emb_ndim: 0` set in `config/arch/trm.yaml`. The model automatically handles this configuration and learns purely from demonstration examples.
+
 ## Reference
 
 If you find our work useful, please consider citing:

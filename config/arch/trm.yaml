@@ -16,7 +16,7 @@ hidden_size: 512
 num_heads: 8  # min(2, hidden_size // 64)
 expansion: 4
 
-puzzle_emb_ndim: ${.hidden_size}
+puzzle_emb_ndim: 0  # Disabled - using in-context learning instead
 
 pos_encodings: rope
 forward_dtype: bfloat16
