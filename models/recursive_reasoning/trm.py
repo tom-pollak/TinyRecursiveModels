@@ -8,7 +8,7 @@ from torch import nn
 from pydantic import BaseModel
 import random
 from models.common import trunc_normal_init_
-from models.layers import rms_norm, LinearSwish, SwiGLU, Attention, RotaryEmbedding, CosSin, CastedEmbedding, CastedLinear
+from models.layers import rms_norm, LinearSwish, SwiGLU, Attention, RotaryEmbedding, RotaryEmbedding2D, CosSin, CastedEmbedding, CastedLinear
 from models.sparse_embedding import CastedSparseEmbedding
 
 IGNORE_LABEL_ID = -100
@@ -61,6 +61,15 @@ class TinyRecursiveReasoningModel_ACTV1Config(BaseModel):
     mlp_t: bool = False # use mlp on L instead of transformer
     puzzle_emb_len: int = 16 # if non-zero, its specified to this value
     no_ACT_continue: bool =  True # No continue ACT loss, only use the sigmoid of the halt which makes much more sense
+
+    # Patch-based architecture
+    use_patches: bool = False
+    patch_size: int = 3
+    grid_height: int = 30
+    grid_width: int = 30
+    upsample_method: str = "pixel_shuffle"  # or "linear"
+    rope_2d: bool = False
+    rope_2d_method: str = "mixed"  # "axial" or "mixed"
 
 class TinyRecursiveReasoningModel_ACTV1Block(nn.Module):
     def __init__(self, config: TinyRecursiveReasoningModel_ACTV1Config) -> None:
@@ -136,13 +145,68 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
             self.puzzle_emb = CastedSparseEmbedding(self.config.num_puzzle_identifiers, self.config.puzzle_emb_ndim,
                                                     batch_size=self.config.batch_size, init_std=0, cast_to=self.forward_dtype)
 
+        # Patch-based architecture
+        if self.config.use_patches:
+            # Patch embedding: Conv2d to convert grid to patches
+            self.patch_embed = nn.Conv2d(
+                in_channels=1,
+                out_channels=self.config.hidden_size,
+                kernel_size=self.config.patch_size,
+                stride=self.config.patch_size,
+                bias=False
+            )
+            # Initialize with truncated normal
+            with torch.no_grad():
+                trunc_normal_init_(self.patch_embed.weight, std=embed_init_std)
+
+            # Calculate number of patches
+            self.num_patches = (self.config.grid_height // self.config.patch_size) * \
+                              (self.config.grid_width // self.config.patch_size)
+
+            # Upsampling layer to convert patches back to full resolution
+            if self.config.upsample_method == "pixel_shuffle":
+                self.upsample = nn.Sequential(
+                    nn.Conv2d(self.config.hidden_size,
+                             self.config.vocab_size * (self.config.patch_size ** 2),
+                             kernel_size=1,
+                             bias=False),
+                    nn.PixelShuffle(self.config.patch_size)
+                )
+                # Initialize upsampling conv
+                with torch.no_grad():
+                    trunc_normal_init_(self.upsample[0].weight, std=embed_init_std)
+            elif self.config.upsample_method == "linear":
+                # Each patch predicts all cells in the patch
+                self.upsample = CastedLinear(
+                    self.config.hidden_size,
+                    self.config.vocab_size * (self.config.patch_size ** 2),
+                    bias=False
+                )
+
         # LM Blocks
         if self.config.pos_encodings == "rope":
-            self.rotary_emb = RotaryEmbedding(dim=self.config.hidden_size // self.config.num_heads,
-                                              max_position_embeddings=self.config.seq_len + self.puzzle_emb_len,
-                                              base=self.config.rope_theta)
+            if self.config.use_patches and self.config.rope_2d:
+                # Use 2D RoPE for patch-based architecture
+                patch_grid_h = self.config.grid_height // self.config.patch_size
+                patch_grid_w = self.config.grid_width // self.config.patch_size
+                self.rotary_emb = RotaryEmbedding2D(
+                    dim=self.config.hidden_size // self.config.num_heads,
+                    grid_height=patch_grid_h,
+                    grid_width=patch_grid_w,
+                    base=self.config.rope_theta,
+                    method=self.config.rope_2d_method
+                )
+            else:
+                # Use 1D RoPE for standard architecture
+                seq_len = self.num_patches if self.config.use_patches else self.config.seq_len
+                self.rotary_emb = RotaryEmbedding(
+                    dim=self.config.hidden_size // self.config.num_heads,
+                    max_position_embeddings=seq_len + self.puzzle_emb_len,
+                    base=self.config.rope_theta
+                )
         elif self.config.pos_encodings == "learned":
-            self.embed_pos = CastedEmbedding(self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, init_std=embed_init_std, cast_to=self.forward_dtype)
+            seq_len = self.num_patches if self.config.use_patches else self.config.seq_len
+            self.embed_pos = CastedEmbedding(seq_len + self.puzzle_emb_len, self.config.hidden_size, init_std=embed_init_std, cast_to=self.forward_dtype)
         else:
             pass
 
@@ -161,12 +225,35 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
 
     def _input_embeddings(self, input: torch.Tensor, puzzle_identifiers: torch.Tensor):
         # Token embedding
-        embedding = self.embed_tokens(input.to(torch.int32))
+        if self.config.use_patches:
+            # Patch-based embedding
+            # Input shape: [batch_size, seq_len] where seq_len = grid_height * grid_width
+            # Reshape to 2D grid: [batch_size, grid_height, grid_width]
+            batch_size = input.shape[0]
+            grid = input.view(batch_size, self.config.grid_height, self.config.grid_width)
+
+            # Add channel dimension and apply patch embedding
+            # Shape: [batch_size, 1, grid_height, grid_width]
+            grid = grid.unsqueeze(1).to(torch.float32)
+
+            # Apply patch embedding conv
+            # Output shape: [batch_size, hidden_size, patch_grid_h, patch_grid_w]
+            embedding = self.patch_embed(grid).to(self.forward_dtype)
+
+            # Flatten spatial dimensions
+            # Shape: [batch_size, hidden_size, num_patches]
+            embedding = embedding.flatten(2)
+
+            # Transpose to [batch_size, num_patches, hidden_size]
+            embedding = embedding.transpose(1, 2)
+        else:
+            # Standard token embedding
+            embedding = self.embed_tokens(input.to(torch.int32))
 
         # Puzzle embeddings
         if self.config.puzzle_emb_ndim > 0:
             puzzle_embedding = self.puzzle_emb(puzzle_identifiers)
-            
+
             pad_count = self.puzzle_emb_len * self.config.hidden_size - puzzle_embedding.shape[-1]
             if pad_count > 0:
                 puzzle_embedding = F.pad(puzzle_embedding, (0, pad_count))
@@ -182,9 +269,10 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
         return self.embed_scale * embedding
 
     def empty_carry(self, batch_size: int):
+        seq_len = self.num_patches if self.config.use_patches else self.config.seq_len
         return TinyRecursiveReasoningModel_ACTV1InnerCarry(
-            z_H=torch.empty(batch_size, self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype),
-            z_L=torch.empty(batch_size, self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype),
+            z_H=torch.empty(batch_size, seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype),
+            z_L=torch.empty(batch_size, seq_len + self.puzzle_emb_len, self.config.hidden_size, dtype=self.forward_dtype),
         )
         
     def reset_carry(self, reset_flag: torch.Tensor, carry: TinyRecursiveReasoningModel_ACTV1InnerCarry):
@@ -217,7 +305,76 @@ class TinyRecursiveReasoningModel_ACTV1_Inner(nn.Module):
 
         # LM Outputs
         new_carry = TinyRecursiveReasoningModel_ACTV1InnerCarry(z_H=z_H.detach(), z_L=z_L.detach())  # New carry no grad
-        output = self.lm_head(z_H)[:, self.puzzle_emb_len:]
+
+        # Remove puzzle embeddings
+        z_H_patches = z_H[:, self.puzzle_emb_len:]
+
+        if self.config.use_patches:
+            # Upsample from patches to full resolution
+            batch_size = z_H_patches.shape[0]
+
+            if self.config.upsample_method == "pixel_shuffle":
+                # Reshape to spatial format: [B, num_patches, hidden_size] -> [B, hidden_size, patch_h, patch_w]
+                patch_grid_h = self.config.grid_height // self.config.patch_size
+                patch_grid_w = self.config.grid_width // self.config.patch_size
+
+                z_H_spatial = z_H_patches.transpose(1, 2).view(
+                    batch_size,
+                    self.config.hidden_size,
+                    patch_grid_h,
+                    patch_grid_w
+                )
+
+                # Apply upsampling: [B, hidden_size, patch_h, patch_w] -> [B, vocab_size, grid_h, grid_w]
+                output_grid = self.upsample(z_H_spatial)
+
+                # Flatten to sequence: [B, vocab_size, grid_h, grid_w] -> [B, vocab_size, seq_len]
+                output = output_grid.flatten(2)
+
+                # Transpose to [B, seq_len, vocab_size]
+                output = output.transpose(1, 2)
+
+            elif self.config.upsample_method == "linear":
+                # Each patch predicts all cells in the patch
+                # [B, num_patches, hidden_size] -> [B, num_patches, vocab_size * patch_size^2]
+                patch_predictions = self.upsample(z_H_patches)
+
+                # Reshape to [B, num_patches, vocab_size, patch_size^2]
+                patch_predictions = patch_predictions.view(
+                    batch_size,
+                    self.num_patches,
+                    self.config.vocab_size,
+                    self.config.patch_size ** 2
+                )
+
+                # Rearrange to grid format
+                patch_grid_h = self.config.grid_height // self.config.patch_size
+                patch_grid_w = self.config.grid_width // self.config.patch_size
+
+                # Reshape patches to spatial grid: [B, patch_h, patch_w, vocab_size, patch_size, patch_size]
+                patch_predictions = patch_predictions.view(
+                    batch_size,
+                    patch_grid_h,
+                    patch_grid_w,
+                    self.config.vocab_size,
+                    self.config.patch_size,
+                    self.config.patch_size
+                )
+
+                # Rearrange to full grid: [B, vocab_size, grid_h, grid_w]
+                output_grid = patch_predictions.permute(0, 3, 1, 4, 2, 5).contiguous().view(
+                    batch_size,
+                    self.config.vocab_size,
+                    self.config.grid_height,
+                    self.config.grid_width
+                )
+
+                # Flatten and transpose: [B, seq_len, vocab_size]
+                output = output_grid.flatten(2).transpose(1, 2)
+        else:
+            # Standard token-based output
+            output = self.lm_head(z_H_patches)
+
         q_logits = self.q_head(z_H[:, 0]).to(torch.float32) # Q-head; uses the first puzzle_emb position
         return new_carry, output, (q_logits[..., 0], q_logits[..., 1])
 

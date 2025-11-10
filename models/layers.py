@@ -96,6 +96,103 @@ class RotaryEmbedding(nn.Module):
         return self.cos_cached, self.sin_cached
 
 
+def apply_rotary_pos_emb_2d(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
+    """Apply 2D rotary position embeddings to query and key tensors.
+
+    Args:
+        q: Query tensor [bs, seq_len, num_heads, head_dim]
+        k: Key tensor [bs, seq_len, num_heads, head_dim]
+        cos: Cosine cache [seq_len, head_dim]
+        sin: Sine cache [seq_len, head_dim]
+
+    Returns:
+        Tuple of rotated query and key tensors
+    """
+    orig_dtype = q.dtype
+    q = q.to(cos.dtype)
+    k = k.to(cos.dtype)
+
+    q_embed = (q * cos.unsqueeze(-2)) + (rotate_half(q) * sin.unsqueeze(-2))
+    k_embed = (k * cos.unsqueeze(-2)) + (rotate_half(k) * sin.unsqueeze(-2))
+
+    return q_embed.to(orig_dtype), k_embed.to(orig_dtype)
+
+
+class RotaryEmbedding2D(nn.Module):
+    """2D Rotary Position Embedding for grid-structured data.
+
+    Uses mixed-frequency method to combine both x and y spatial positions.
+    Based on "Rotary Position Embedding for Vision Transformer" (arxiv 2403.13298).
+    """
+    def __init__(self, dim, grid_height, grid_width, base=10000.0, method="mixed", device=None):
+        super().__init__()
+
+        self.dim = dim
+        self.grid_height = grid_height
+        self.grid_width = grid_width
+        self.method = method
+
+        # Generate frequency bases
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
+
+        if method == "axial":
+            # Axial method: split dimensions in half for x and y
+            # First half of dims for x-axis, second half for y-axis
+            half_dim = dim // 2
+            inv_freq_x = inv_freq[:half_dim // 2]
+            inv_freq_y = inv_freq[:half_dim // 2]
+
+            # Generate position indices
+            pos_x = torch.arange(grid_width, dtype=torch.float32, device=device)
+            pos_y = torch.arange(grid_height, dtype=torch.float32, device=device)
+
+            # Compute frequencies for each axis
+            freqs_x = torch.outer(pos_x, inv_freq_x)  # [W, half_dim//2]
+            freqs_y = torch.outer(pos_y, inv_freq_y)  # [H, half_dim//2]
+
+            # Create 2D grid of frequencies
+            freqs_x_grid = freqs_x.unsqueeze(0).repeat(grid_height, 1, 1)  # [H, W, half_dim//2]
+            freqs_y_grid = freqs_y.unsqueeze(1).repeat(1, grid_width, 1)   # [H, W, half_dim//2]
+
+            # Concatenate x and y frequencies and duplicate for rotation
+            freqs = torch.cat([freqs_x_grid, freqs_y_grid], dim=-1)  # [H, W, half_dim]
+            emb = torch.cat([freqs, freqs], dim=-1)  # [H, W, dim]
+
+        else:  # mixed method (default, better performance)
+            # Mixed method: combine x and y positions with all frequency components
+            # This allows capturing diagonal and mixed spatial relationships
+
+            # Generate position indices for 2D grid
+            pos_y, pos_x = torch.meshgrid(
+                torch.arange(grid_height, dtype=torch.float32, device=device),
+                torch.arange(grid_width, dtype=torch.float32, device=device),
+                indexing='ij'
+            )
+
+            # For mixed method, we combine both x and y positions
+            # Each dimension gets contribution from both spatial axes
+            # freqs = pos_x * inv_freq + pos_y * inv_freq (simplified)
+            # But we want to learn the mixing, so we create separate components
+
+            # Create separate frequency embeddings for x and y
+            freqs_x = torch.einsum('hw,d->hwd', pos_x, inv_freq)  # [H, W, dim//2]
+            freqs_y = torch.einsum('hw,d->hwd', pos_y, inv_freq)  # [H, W, dim//2]
+
+            # Mix them together (both contribute to all dimensions)
+            freqs = freqs_x + freqs_y  # [H, W, dim//2]
+            emb = torch.cat([freqs, freqs], dim=-1)  # [H, W, dim]
+
+        # Flatten spatial dimensions to match sequence format
+        emb = emb.view(-1, dim)  # [H*W, dim]
+
+        # Cache cos and sin embeddings
+        self.cos_cached = nn.Buffer(emb.cos(), persistent=False)
+        self.sin_cached = nn.Buffer(emb.sin(), persistent=False)
+
+    def forward(self):
+        return self.cos_cached, self.sin_cached
+
+
 class Attention(nn.Module):
     def __init__(self, hidden_size, head_dim, num_heads, num_key_value_heads, causal=False):
         super().__init__()

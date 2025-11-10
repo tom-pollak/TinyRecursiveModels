@@ -22,5 +22,13 @@ pos_encodings: rope
 forward_dtype: bfloat16
 
 mlp_t: False # use mlp on L instead of transformer
-puzzle_emb_len: 16 # if non-zero, its specified to this value
-no_ACT_continue: True # No continue ACT loss, only use the sigmoid of the halt which makes much more sense
+puzzle_emb_len: 16 # if non-zero, its specified to this valueno_ACT_continue: True # No continue ACT loss, only use the sigmoid of the halt which makes much more sense
+
+# Patch-based architecture (set use_patches to true to enable)
+use_patches: false
+patch_size: 3
+grid_height: 30
+grid_width: 30
+upsample_method: pixel_shuffle  # pixel_shuffle or linear
+rope_2d: false  # use 2D RoPE when use_patches is true
+rope_2d_method: mixed  # mixed or axial
