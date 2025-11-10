@@ -432,9 +432,9 @@ def convert_dataset(config: DataProcessConfig):
                 )
 
         # Metadata
-        # Sequence length: (2*N - 1) * grid_size for N examples
-        # where we have (N-1) demo pairs + 1 test input, each grid is 900 tokens
-        seq_len = (2 * max_examples_per_puzzle - 1) * ARCMaxGridSize * ARCMaxGridSize
+        # Sequence length: 2*N * grid_size for N examples
+        # where we have (N-1) demo pairs + 1 test pair (input + output), each grid is 900 tokens
+        seq_len = 2 * max_examples_per_puzzle * ARCMaxGridSize * ARCMaxGridSize
 
         metadata = PuzzleDatasetMetadata(
             seq_len=seq_len,

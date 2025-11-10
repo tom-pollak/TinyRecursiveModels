@@ -58,8 +58,9 @@ def test_construct_in_context_sequence():
     # Expected lengths:
     # - 2 demonstrations (each has input + output): 2 * 2 * 900 = 3600
     # - 1 test input: 900
-    # Total input sequence: 4500
-    expected_input_len = (2 * (len(examples) - 1) + 1) * grid_size
+    # Total input sequence before test_out: 4500
+    # After concatenating test_out to labels: 5400 total
+    expected_input_len = (2 * (len(examples) - 1) + 1) * grid_size  # 4500
     assert len(input_seq) == expected_input_len, (
         f"Expected input length {expected_input_len}, got {len(input_seq)}"
     )
@@ -115,9 +116,9 @@ def test_rolled_sequences():
         print(f"  Label length: {len(label_seq)}")
         print(f"  Test output length: {len(test_out)}")
 
-        # After concatenating test_out, final sequence should be (2*N-1)*900
+        # After concatenating test_out, final sequence should be 2*N*900
         final_label_len = len(label_seq) + len(test_out)
-        expected_len = (2 * len(examples) - 1) * grid_size
+        expected_len = 2 * len(examples) * grid_size
         assert final_label_len == expected_len, (
             f"Expected final length {expected_len}, got {final_label_len}"
         )
@@ -148,7 +149,7 @@ def test_label_masking():
     full_label_seq = np.concatenate([label_seq, test_out])
 
     grid_size = ARCMaxGridSize * ARCMaxGridSize
-    # Structure: [demo_in, demo_out, test_in] where only test_out has valid labels
+    # Structure: [demo_in, demo_out, test_in, test_out] where only test_out has valid labels
     # Positions 0-899: demo input (masked)
     # Positions 900-1799: demo output (masked)
     # Positions 1800-2699: test input (masked)
@@ -178,14 +179,14 @@ def test_sequence_length_calculation():
     grid_size = ARCMaxGridSize * ARCMaxGridSize  # 900
 
     test_cases = [
-        (2, (2 * 2 - 1) * grid_size),  # 2 examples -> 3 grids -> 2700 tokens
-        (3, (2 * 3 - 1) * grid_size),  # 3 examples -> 5 grids -> 4500 tokens
-        (4, (2 * 4 - 1) * grid_size),  # 4 examples -> 7 grids -> 6300 tokens
-        (5, (2 * 5 - 1) * grid_size),  # 5 examples -> 9 grids -> 8100 tokens
+        (2, 2 * 2 * grid_size),  # 2 examples -> 4 grids -> 3600 tokens
+        (3, 2 * 3 * grid_size),  # 3 examples -> 6 grids -> 5400 tokens
+        (4, 2 * 4 * grid_size),  # 4 examples -> 8 grids -> 7200 tokens
+        (5, 2 * 5 * grid_size),  # 5 examples -> 10 grids -> 9000 tokens
     ]
 
     for num_examples, expected_seq_len in test_cases:
-        actual_seq_len = (2 * num_examples - 1) * grid_size
+        actual_seq_len = 2 * num_examples * grid_size
         assert actual_seq_len == expected_seq_len, (
             f"Seq len calculation failed for {num_examples} examples"
         )
