@@ -1,6 +1,11 @@
 """Test script to verify patch-based implementation."""
+
 import torch
-from models.recursive_reasoning.trm import TinyRecursiveReasoningModel_ACTV1Config, TinyRecursiveReasoningModel_ACTV1_Inner
+from models.recursive_reasoning.trm import (
+    TinyRecursiveReasoningModel_ACTV1Config,
+    TinyRecursiveReasoningModel_ACTV1_Inner,
+)
+
 
 def test_standard_mode():
     """Test the standard cell-based tokenization."""
@@ -32,7 +37,7 @@ def test_standard_mode():
     # Create dummy input
     batch = {
         "inputs": torch.randint(0, 12, (2, 900)),  # [batch_size, seq_len]
-        "puzzle_identifiers": torch.randint(0, 100, (2,))
+        "puzzle_identifiers": torch.randint(0, 100, (2,)),
     }
 
     # Forward pass
@@ -46,7 +51,9 @@ def test_standard_mode():
     print(f"\nQ-halt shape: {q_halt.shape}")
     print(f"Expected: [2]")
 
-    assert output.shape == (2, 900, 12), f"Expected output shape [2, 900, 12], got {output.shape}"
+    assert output.shape == (2, 900, 12), (
+        f"Expected output shape [2, 900, 12], got {output.shape}"
+    )
     print("\n✓ Standard mode test passed!")
 
 
@@ -86,7 +93,7 @@ def test_patch_mode():
     # Create dummy input (same format as standard mode)
     batch = {
         "inputs": torch.randint(0, 12, (2, 900)),  # [batch_size, seq_len]
-        "puzzle_identifiers": torch.randint(0, 100, (2,))
+        "puzzle_identifiers": torch.randint(0, 100, (2,)),
     }
 
     # Forward pass
@@ -103,8 +110,12 @@ def test_patch_mode():
     print(f"\nQ-halt shape: {q_halt.shape}")
     print(f"Expected: [2]")
 
-    assert output.shape == (2, 900, 12), f"Expected output shape [2, 900, 12], got {output.shape}"
-    assert carry.z_H.shape[1] == 116, f"Expected carry seq_len 116 (100 patches + 16 puzzle_emb), got {carry.z_H.shape[1]}"
+    assert output.shape == (2, 900, 12), (
+        f"Expected output shape [2, 900, 12], got {output.shape}"
+    )
+    assert carry.z_H.shape[1] == 116, (
+        f"Expected carry seq_len 116 (100 patches + 16 puzzle_emb), got {carry.z_H.shape[1]}"
+    )
     print("\n✓ Patch mode test passed!")
 
 
@@ -143,7 +154,7 @@ def test_patch_mode_linear_upsample():
 
     batch = {
         "inputs": torch.randint(0, 12, (2, 900)),
-        "puzzle_identifiers": torch.randint(0, 100, (2,))
+        "puzzle_identifiers": torch.randint(0, 100, (2,)),
     }
 
     carry = model.empty_carry(batch_size=2)
@@ -153,7 +164,9 @@ def test_patch_mode_linear_upsample():
     print(f"Output shape: {output.shape}")
     print(f"Expected: [2, 900, 12]")
 
-    assert output.shape == (2, 900, 12), f"Expected output shape [2, 900, 12], got {output.shape}"
+    assert output.shape == (2, 900, 12), (
+        f"Expected output shape [2, 900, 12], got {output.shape}"
+    )
     print("\n✓ Linear upsampling test passed!")
 
 
@@ -171,7 +184,7 @@ def test_2d_rope():
         grid_height=10,
         grid_width=10,
         base=10000.0,
-        method="mixed"
+        method="mixed",
     )
 
     cos, sin = rope_2d_mixed()
@@ -182,11 +195,7 @@ def test_2d_rope():
 
     # Test axial method
     rope_2d_axial = RotaryEmbedding2D(
-        dim=64,
-        grid_height=10,
-        grid_width=10,
-        base=10000.0,
-        method="axial"
+        dim=64, grid_height=10, grid_width=10, base=10000.0, method="axial"
     )
 
     cos, sin = rope_2d_axial()
