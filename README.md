@@ -5,10 +5,10 @@ export job_name="$GC_USER-$run_name"
 llcluster kcancel "interactive-$job_name"
 
 UV_INSTALL="curl -LsSf https://astral.sh/uv/install.sh | sh && source ~/.local/bin/env" \
-SETUP="cd /data/$GC_USER/TinyRecursiveModels/ && source .env && uv venv --python 3.10 --clear && uv pip install -r requirements.txt && source .venv/bin/activate && git checkout in-context && git pull" \
-CMD="torchrun --nproc-per-node 8 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py arch=trm data_paths="[data/arc2concept-aug-1000-incontext]" arch.L_layers=2 arch.H_cycles=3 arch.L_cycles=4 +run_name=${run_name} ema=True lr=1e-4 " \
+SETUP="cd /data/$GC_USER/TinyRecursiveModels/ && source .env && uv venv --python 3.10 --clear && uv pip install -r requirements.txt && source .venv/bin/activate" \
+CMD="torchrun --nproc-per-node 8 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py arch=trm data_paths="[data/arc2concept-aug-1000-incontext]" arch.L_layers=2 arch.H_cycles=3 arch.L_cycles=4 +run_name=$run_name ema=True lr=1e-4 " \
 llcluster kinteractive \
-    --gc-user $job_name
+    --gc-user $job_name \
     --run-command "$UV_INSTALL && $SETUP && $CMD" \
     --priority low
 
