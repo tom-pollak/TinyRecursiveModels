@@ -1,16 +1,22 @@
-
-
 ```
-run_name="dataset-build" \
-CMD="kaggle competitions download -c arc-prize-2025 && python -m dataset.build_arc_dataset --input-file-prefix arc-2/arc-agi   --output-dir data-incontext/arc2concept-aug-1000  --subsets training evaluation  --test-set-name evaluation" \
-GC_USER="tomp-${run_name}" \
+export GC_USER=tomp
+export run_name="trm-train"
+export job_name="$GC_USER-$run_name"
+llcluster kcancel "interactive-$job_name"
+
 UV_INSTALL="curl -LsSf https://astral.sh/uv/install.sh | sh && source ~/.local/bin/env" \
-SETUP="cd /data/tomp/TinyRecursiveModels/ && source .env && uv venv && uv pip install -r requirements.txt && source .venv/bin/activate && mkdir ~/.config/kaggle/ && cp ./kaggle.json ~/.config/kaggle/kaggle.json" \
+SETUP="cd /data/$GC_USER/TinyRecursiveModels/ && source .env && uv venv --python 3.10 --clear && uv pip install -r requirements.txt && source .venv/bin/activate && git checkout in-context && git pull" \
+CMD="torchrun --nproc-per-node 8 --rdzv_backend=c10d --rdzv_endpoint=localhost:0 --nnodes=1 pretrain.py arch=trm data_paths="[data/arc2concept-aug-1000-incontext]" arch.L_layers=2 arch.H_cycles=3 arch.L_cycles=4 +run_name=${run_name} ema=True lr=1e-4 " \
 llcluster kinteractive \
-    --run-command "${UV_INSTALL} && ${SETUP} && ${CMD}" \
-    --priority low --gpu 0 --cpu 64
-```
+    --gc-user $job_name
+    --run-command "$UV_INSTALL && $SETUP && $CMD" \
+    --priority low
 
+# unset env (fish)
+set -e GC_USER
+set -e job_name
+set -e run_name
+```
 
 # Less is More: Recursive Reasoning with Tiny Networks
 
