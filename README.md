@@ -1,3 +1,17 @@
+
+
+```
+run_name="dataset-build" \
+CMD="kaggle competitions download -c arc-prize-2025 && python -m dataset.build_arc_dataset --input-file-prefix arc-2/arc-agi   --output-dir data-incontext/arc2concept-aug-1000  --subsets training evaluation  --test-set-name evaluation" \
+GC_USER="tomp-${run_name}" \
+UV_INSTALL="curl -LsSf https://astral.sh/uv/install.sh | sh && source ~/.local/bin/env" \
+SETUP="cd /data/tomp/TinyRecursiveModels/ && source .env && uv venv && uv pip install -r requirements.txt && source .venv/bin/activate && mkdir ~/.config/kaggle/ && cp ./kaggle.json ~/.config/kaggle/kaggle.json" \
+llcluster kinteractive \
+    --run-command "${UV_INSTALL} && ${SETUP} && ${CMD}" \
+    --priority low --gpu 0 --cpu 64
+```
+
+
 # Less is More: Recursive Reasoning with Tiny Networks
 
 This is the codebase for the paper: "Less is More: Recursive Reasoning with Tiny Networks". TRM is a recursive reasoning approach that achieves amazing scores of 45% on ARC-AGI-1 and 8% on ARC-AGI-2 using a tiny 7M parameters neural network.
