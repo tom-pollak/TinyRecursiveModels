@@ -423,9 +423,20 @@ def convert_dataset(config: DataProcessConfig):
                 results["group_indices"].append(puzzle_id)
                 total_groups += 1
 
+            # Pad sequences to max length before stacking
+            max_seq_len = 2 * max_examples_per_puzzle * ARCMaxGridSize * ARCMaxGridSize
+
             for k, v in results.items():
                 if k in {"inputs", "labels"}:
-                    v = np.stack(v, 0)
+                    # Pad all sequences to max_seq_len
+                    padded_sequences = []
+                    for seq in v:
+                        if len(seq) < max_seq_len:
+                            # Pad with 0 (PAD token for inputs, ignore_label_id for labels)
+                            padding = np.zeros(max_seq_len - len(seq), dtype=seq.dtype)
+                            seq = np.concatenate([seq, padding])
+                        padded_sequences.append(seq)
+                    v = np.stack(padded_sequences, 0)
                 else:
                     v = np.array(v, dtype=np.int32)
 
