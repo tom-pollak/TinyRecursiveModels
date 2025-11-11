@@ -400,10 +400,12 @@ def convert_dataset(config: DataProcessConfig):
                             ignore_label_id=0,  # Will be used for masking
                         )
 
-                        # Concatenate test output to both inputs and labels
-                        # Input includes test_out for teacher forcing during training
-                        # Labels compute loss only on test_out positions (rest are masked)
-                        input_seq = np.concatenate([input_seq, test_out])
+                        # Concatenate to match lengths
+                        # Input: pad with PAD tokens (0) where test_out would be - model must generate from context
+                        # Labels: test_out is the prediction target, loss computed only on these positions
+                        input_seq = np.concatenate(
+                            [input_seq, np.zeros_like(test_out)]
+                        )  # Pad with zeros (PAD token)
                         label_seq = np.concatenate([label_seq, test_out])
 
                         results["inputs"].append(input_seq)
